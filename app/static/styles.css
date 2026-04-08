@@ -1,0 +1,466 @@
+:root {
+  --bg: #0b0f14;
+  --panel: #111824;
+  --panel-border: rgba(255, 255, 255, 0.09);
+  --text: #e9f0ff;
+  --muted: #97a6c3;
+  --accent: #6be3ff;
+  --danger: #ff7b7b;
+  --ok: #58d39b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at 20% -10%, #132338, #0b0f14 45%);
+  color: var(--text);
+  font-family: "Segoe UI", "Inter", system-ui, sans-serif;
+  overflow: hidden;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 0.78fr);
+  gap: 12px;
+  padding: 12px;
+  height: 100dvh;
+}
+
+.panel {
+  background: linear-gradient(180deg, #132036 0%, #101826 100%);
+  border-radius: 14px;
+  border: 1px solid var(--panel-border);
+  overflow: hidden;
+  position: relative;
+  min-height: 0;
+}
+
+.panelTitle {
+  padding: 10px 12px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.lensView {
+  height: calc(100% - 36px);
+  width: 100%;
+  position: relative;
+  border-radius: 36px;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.panoSurface {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 200%;
+}
+
+.leftSplit .panoSurface {
+  left: 0;
+}
+
+.rightSplit .panoSurface {
+  right: 0;
+}
+
+.lensView::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(120deg, rgba(255, 255, 255, 0.05), transparent 38%),
+    radial-gradient(circle at center, transparent 60%, rgba(0, 0, 0, 0.28)),
+    rgba(20, 40, 60, 0.18);
+  pointer-events: none;
+}
+
+.lensView.empty::before {
+  content: "Load a route to start Street View";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: rgba(233, 240, 255, 0.72);
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-align: center;
+  background:
+    radial-gradient(circle at center, rgba(107, 227, 255, 0.08), transparent 55%),
+    linear-gradient(180deg, rgba(9, 14, 22, 0.68), rgba(9, 14, 22, 0.84));
+  z-index: 2;
+}
+
+.overlay {
+  position: absolute;
+  top: 36px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 12px;
+  pointer-events: none;
+}
+
+.crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  opacity: 0.5;
+}
+
+.overlayCard {
+  background: rgba(10, 16, 25, 0.48);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 11px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  backdrop-filter: blur(3px);
+  max-width: 74%;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.overlayTitle {
+  font-size: 11px;
+  color: var(--accent);
+  margin-bottom: 5px;
+}
+
+.timeHud {
+  font-size: 11px;
+  color: var(--text);
+  background: rgba(10, 16, 25, 0.44);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-weight: 700;
+}
+
+.rightLensHud {
+  position: absolute;
+  inset: 12px;
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.turnQueueHud {
+  display: grid;
+  gap: 8px;
+  width: 86px;
+}
+
+.turnQueueItem {
+  background: rgba(10, 16, 25, 0.46);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 11px;
+  min-height: 80px;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 6px;
+  padding: 8px 4px;
+  color: var(--text);
+  backdrop-filter: blur(3px);
+}
+
+.turnQueueItem.current {
+  background: rgba(10, 16, 25, 0.58);
+  border-color: rgba(107, 227, 255, 0.28);
+  box-shadow: 0 0 0 1px rgba(107, 227, 255, 0.08) inset;
+}
+
+.turnQueueItem.queued {
+  background: rgba(10, 16, 25, 0.28);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.turnQueueItem.queued .turnQueueArrow,
+.turnQueueItem.queued .turnQueueDistance {
+  opacity: 0.55;
+}
+
+.turnQueueArrow {
+  font-size: 42px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.turnQueueDistance {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+
+.rightHudMain {
+  display: grid;
+  gap: 8px;
+}
+
+.topHudRow {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 8px;
+  align-items: start;
+  justify-content: start;
+}
+
+.notificationHud,
+.instructionHud {
+  background: rgba(10, 16, 25, 0.44);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 11px;
+  color: var(--text);
+  backdrop-filter: blur(3px);
+}
+
+.notificationHud {
+  min-height: 0;
+  display: inline-flex;
+  align-items: center;
+  text-align: center;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  max-width: 180px;
+}
+
+.instructionHud {
+  padding: 6px 10px;
+}
+
+#navPrimary {
+  font-size: 12px;
+  line-height: 1.3;
+  font-weight: 700;
+  white-space: normal;
+}
+
+.sub {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.navDistance {
+  color: var(--accent);
+  font-size: 12px;
+  margin-top: 3px;
+  font-weight: 700;
+}
+
+.controlsPanel {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  padding: 7px;
+  height: calc(100% - 36px);
+  min-height: 0;
+  overflow: auto;
+}
+
+.inlineStatus {
+  border-radius: 8px;
+  padding: 5px 7px;
+  font-size: 11px;
+  border: 1px solid transparent;
+}
+
+.inlineStatus.ok {
+  background: rgba(88, 211, 155, 0.14);
+  border-color: rgba(88, 211, 155, 0.45);
+  color: #b8ffe0;
+}
+
+.inlineStatus.pending {
+  background: rgba(107, 227, 255, 0.15);
+  border-color: rgba(107, 227, 255, 0.45);
+  color: #d8f8ff;
+}
+
+.inlineStatus.error {
+  background: rgba(255, 123, 123, 0.14);
+  border-color: rgba(255, 123, 123, 0.45);
+  color: #ffdede;
+}
+
+.controlsPanel hr {
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin: 3px 0;
+}
+
+.routeRow,
+.actionRow,
+.inputRow,
+.languageRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.fullWidthInput {
+  width: 100%;
+}
+
+.routeActions {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.translateActions,
+.chatActions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.controlsPanel input,
+.controlsPanel select {
+  padding: 4px 7px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  background: #1b2434;
+  color: white;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.controlsPanel button {
+  padding: 4px 7px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: #02141a;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.controlsPanel button.secondary {
+  background: #2a3447;
+  color: var(--text);
+}
+
+.controlsPanel button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.controlsPanel button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+#gpsMap {
+  height: calc(100% - 36px);
+}
+
+.gpsReadout {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  background: rgba(10, 16, 25, 0.68);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 8px;
+  font-size: 12px;
+}
+
+.lensView canvas,
+.lensView iframe,
+.lensView div {
+  z-index: 0 !important;
+}
+
+.overlayCard,
+.rightLensHud,
+.crosshair,
+.overlayCard {
+  z-index: 101;
+  position: relative;
+}
+
+@media (max-width: 1050px) {
+  body {
+    overflow: auto;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(4, minmax(250px, auto));
+    height: auto;
+    min-height: 100dvh;
+  }
+
+  .panel {
+    min-height: 280px;
+  }
+
+  .overlayCard {
+    max-width: 86%;
+  }
+
+  .rightLensHud {
+    inset: 8px;
+  }
+}
+
+@media (max-width: 620px) {
+  .grid {
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .routeRow,
+  .actionRow,
+  .inputRow,
+  .languageRow {
+    grid-template-columns: 1fr;
+  }
+
+  .controlsPanel {
+    padding: 8px;
+  }
+
+  .rightLensHud {
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .turnQueueHud {
+    width: 72px;
+  }
+
+  .turnQueueItem {
+    min-height: 68px;
+  }
+
+  .turnQueueArrow {
+    font-size: 34px;
+  }
+}

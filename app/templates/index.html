@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Smart Glasses Demo</title>
+<link rel="stylesheet" href="/static/styles.css"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+</head>
+<body>
+<div class="grid">
+
+<div class="panel">
+<div class="panelTitle">Left Lens</div>
+<div class="lensView leftSplit" id="leftLens">
+<div class="panoSurface" id="leftPano"></div>
+</div>
+<div class="overlay">
+<div class="crosshair"></div>
+<div class="overlayCard">
+<div class="overlayTitle">Translation</div>
+<div id="translationText">-</div>
+</div>
+<div class="overlayCard">
+<div class="overlayTitle">AI</div>
+<div id="aiText">-</div>
+</div>
+</div>
+</div>
+
+<div class="panel">
+<div class="panelTitle">Right Lens</div>
+<div class="lensView rightSplit" id="rightLens">
+<div class="panoSurface" id="rightPano"></div>
+</div>
+<div class="overlay">
+<div class="crosshair"></div>
+<div class="rightLensHud">
+<div class="turnQueueHud" id="navQueue">-</div>
+<div class="rightHudMain">
+<div class="topHudRow">
+<div class="notificationHud" id="notificationText">Ready.</div>
+<span id="timeText" class="timeHud"></span>
+</div>
+<div class="instructionHud">
+<div id="navPrimary">Waiting for route...</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="panel">
+<div class="panelTitle">Controls</div>
+<div class="controlsPanel">
+<div id="inlineStatus" class="inlineStatus ok">Ready.</div>
+
+<div class="routeRow">
+<input id="sourceInput" placeholder="Start location"/>
+<input id="destInput" placeholder="Destination"/>
+</div>
+
+<div class="actionRow routeActions">
+<button id="routeBtn">Load Route</button>
+<button id="startDemoBtn">Start Demo</button>
+<button id="stopDemoBtn" class="secondary">Stop</button>
+<button id="resetDemoBtn" class="secondary">Reset</button>
+</div>
+
+<hr/>
+
+<div class="languageRow">
+<select id="sourceLangInput">
+<option value="auto">Auto detect</option>
+<option value="en-US">English</option>
+<option value="es-ES">Spanish</option>
+<option value="fr-FR">French</option>
+<option value="de-DE">German</option>
+<option value="hi-IN">Hindi</option>
+</select>
+<select id="targetLangInput">
+<option value="en">English</option>
+<option value="es">Spanish</option>
+<option value="fr">French</option>
+<option value="de">German</option>
+<option value="hi">Hindi</option>
+</select>
+</div>
+<input id="promptInput" class="fullWidthInput" placeholder="Translate or ask AI"/>
+<div class="actionRow translateActions">
+<button id="translateBtn">Translate</button>
+<button id="translateVoiceBtn" class="secondary">Voice Translate</button>
+<button id="speakTranslateBtn" class="secondary">Speak Translation</button>
+</div>
+
+<hr/>
+
+<div class="actionRow chatActions">
+<button id="chatBtn">Ask AI</button>
+<button id="chatVoiceBtn" class="secondary">Voice Chat</button>
+<button id="speakAiBtn" class="secondary">Speak AI</button>
+</div>
+</div>
+</div>
+
+<div class="panel">
+<div class="panelTitle">GPS</div>
+<div id="gpsMap"></div>
+<div class="gpsReadout">
+<div><b>Lat:</b> <span id="latText">-</span></div>
+<div><b>Lng:</b> <span id="lngText">-</span></div>
+</div>
+</div>
+
+</div>
+<script src="/static/app.js"></script>
+<script src="https://maps.googleapis.com/maps/api/js?key={{ GOOGLE_MAPS_API_KEY }}&libraries=geometry,places"></script>
+</body>
+</html>
