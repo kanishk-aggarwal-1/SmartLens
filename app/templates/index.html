@@ -7,6 +7,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 </head>
 <body>
+{% if USER_EMAIL %}
+<div class="accountBar">
+<span>{{ USER_EMAIL }}</span>
+<button id="logoutBtn" type="button">Log out</button>
+</div>
+{% endif %}
 <div class="grid">
 
 <div class="panel">
@@ -58,6 +64,12 @@
 <input id="sourceInput" placeholder="Start location"/>
 <input id="destInput" placeholder="Destination"/>
 </div>
+<div class="routeMetaRow">
+<input id="waypointsInput" placeholder="Optional waypoint(s), separated by ;"/>
+<select id="routeSelect">
+<option value="0">Route 1</option>
+</select>
+</div>
 
 <div class="actionRow routeActions">
 <button id="routeBtn">Load Route</button>
@@ -105,6 +117,10 @@
 <div class="panel">
 <div class="panelTitle">GPS</div>
 <div id="gpsMap"></div>
+<div class="mapHudControls">
+<button id="followToggleBtn" class="mapHudBtn">Follow: On</button>
+<button id="recenterBtn" class="mapHudBtn secondary">Recenter</button>
+</div>
 <div class="gpsReadout">
 <div><b>Lat:</b> <span id="latText">-</span></div>
 <div><b>Lng:</b> <span id="lngText">-</span></div>
@@ -113,6 +129,10 @@
 
 </div>
 <script src="/static/app.js"></script>
+{% if USE_MOCK_MAPS %}
+<script src="/static/google-maps-mock.js"></script>
+{% else %}
 <script src="https://maps.googleapis.com/maps/api/js?key={{ GOOGLE_MAPS_API_KEY }}&libraries=geometry,places"></script>
+{% endif %}
 </body>
 </html>

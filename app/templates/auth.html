@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>SmartLens Login</title>
+<link rel="stylesheet" href="/static/styles.css"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+</head>
+<body class="authBody">
+<main class="authShell">
+<section class="authPanel">
+<div>
+<div class="authBrand">SmartLens</div>
+<h1 id="authTitle">Log in</h1>
+</div>
+
+<div id="authStatus" class="inlineStatus ok">Use your account to load your private API keys.</div>
+
+<form id="loginForm" class="authForm">
+<input id="loginEmail" type="email" autocomplete="email" placeholder="Email" required/>
+<input id="loginPassword" type="password" autocomplete="current-password" placeholder="Password" required/>
+<button type="submit">Log in</button>
+</form>
+
+{% if ALLOW_SIGNUPS %}
+<form id="signupForm" class="authForm hidden">
+<input id="signupEmail" type="email" autocomplete="email" placeholder="Email" required/>
+<input id="signupPassword" type="password" autocomplete="new-password" placeholder="Password" minlength="8" required/>
+<input id="signupGoogleKey" type="password" autocomplete="off" placeholder="Google Maps API key" required/>
+<input id="signupGeminiKey" type="password" autocomplete="off" placeholder="Gemini API key"/>
+<button type="submit">Create account</button>
+</form>
+
+<button id="toggleAuthMode" class="linkButton" type="button">Create an account</button>
+{% endif %}
+</section>
+</main>
+<script src="/static/auth.js"></script>
+</body>
+</html>

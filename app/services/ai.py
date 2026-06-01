@@ -3,11 +3,17 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
+
+from ..settings import settings
+from .cache import TTLCache
+from .monitoring import logger, metrics
+
 
 class AIServiceError(Exception):
     pass
@@ -35,6 +41,16 @@ PHRASEBOOK: dict[str, dict[str, str]] = {
 }
 
 
+weather_cache: TTLCache[dict[str, Any]] = TTLCache(
+    name="weather",
+    default_ttl_s=settings.WEATHER_CACHE_TTL_S,
+)
+street_view_cache: TTLCache[bytes] = TTLCache(
+    name="street_view",
+    default_ttl_s=settings.STREET_VIEW_CACHE_TTL_S,
+)
+
+
 def mock_translate(text: str, target_lang: str, source_lang: str = "auto") -> dict[str, Any]:
     normalized = text.strip().lower()
     phrase = PHRASEBOOK.get(normalized, {})
@@ -55,7 +71,11 @@ def mock_translate(text: str, target_lang: str, source_lang: str = "auto") -> di
     }
 
 
-def mock_chat(message: str, context: dict[str, Any] | None = None, intent: str | None = None) -> dict[str, Any]:
+def mock_chat(
+    message: str,
+    context: dict[str, Any] | None = None,
+    intent: str | None = None,
+) -> dict[str, Any]:
     context = context or {}
 
     nav_primary = str(context.get("nav_primary") or "")
@@ -82,7 +102,7 @@ def mock_chat(message: str, context: dict[str, Any] | None = None, intent: str |
 
     if intent == "translate":
         return {
-            "reply": "Use phrase chips for quick presets, or enter text and choose a target language.",
+            "reply": "Use the shared input box, then translate to your target language.",
             "mode": "mock",
         }
 
@@ -95,7 +115,7 @@ def mock_chat(message: str, context: dict[str, Any] | None = None, intent: str |
     canned = [
         "I can help with navigation, translation, or quick questions.",
         "If you are walking, keep your head up and I will handle directions.",
-        "Paste text for translation or press an intent chip for a guided action.",
+        "Enter text to translate it, or ask a question about where you are.",
     ]
 
     if route_loaded:
@@ -117,6 +137,7 @@ def _gemini_generate_sync(
     from google.genai import errors as genai_errors
     from google.genai import types
 
+    started = time.perf_counter()
     try:
         client = genai.Client(api_key=gemini_key)
         response = client.models.generate_content(
@@ -125,10 +146,16 @@ def _gemini_generate_sync(
             config=types.GenerateContentConfig(system_instruction=system_instruction),
         )
     except genai_errors.ClientError as exc:
+        metrics.record_provider_status("gemini", f"error:{exc.__class__.__name__}")
+        metrics.record_latency("provider.gemini", (time.perf_counter() - started) * 1000, success=False)
         raise AIServiceError(f"Gemini request failed: {exc}") from exc
     except Exception as exc:
+        metrics.record_provider_status("gemini", f"error:{exc.__class__.__name__}")
+        metrics.record_latency("provider.gemini", (time.perf_counter() - started) * 1000, success=False)
         raise AIServiceError("Gemini request failed.") from exc
 
+    metrics.record_provider_status("gemini", "ok")
+    metrics.record_latency("provider.gemini", (time.perf_counter() - started) * 1000, success=True)
     return (response.text or "").strip()
 
 
@@ -158,10 +185,9 @@ def _parse_gemini_translation_response(raw_text: str, source_lang: str) -> tuple
     if translated_match:
         translated_text = translated_match.group(1).encode("utf-8").decode("unicode_escape")
 
-    if (
-        len(translated_text) >= 2 and
-        ((translated_text.startswith('"') and translated_text.endswith('"')) or
-         (translated_text.startswith("'") and translated_text.endswith("'")))
+    if len(translated_text) >= 2 and (
+        (translated_text.startswith('"') and translated_text.endswith('"'))
+        or (translated_text.startswith("'") and translated_text.endswith("'"))
     ):
         translated_text = translated_text[1:-1]
 
@@ -230,7 +256,113 @@ def _describe_weather_code(code: Any) -> str:
     return labels.get(code, "unknown")
 
 
+def _weather_cache_key(context: dict[str, Any]) -> str | None:
+    current_position = context.get("current_position") or {}
+    lat = current_position.get("lat")
+    lng = current_position.get("lng")
+    if lat is None or lng is None:
+        return None
+    return f"{round(float(lat), 3)}:{round(float(lng), 3)}"
+
+
+def _street_view_cache_key(context: dict[str, Any]) -> str | None:
+    current_position = context.get("current_position") or {}
+    street_view = context.get("street_view") or {}
+    lat = current_position.get("lat")
+    lng = current_position.get("lng")
+    if lat is None or lng is None:
+        return None
+    heading = round(float(street_view.get("heading", 0)), 1)
+    pitch = round(float(street_view.get("pitch", 5)), 1)
+    fov = round(float(street_view.get("fov", 90)), 1)
+    return f"{round(float(lat), 4)}:{round(float(lng), 4)}:{heading}:{pitch}:{fov}"
+
+
+async def _request_json_with_retries(
+    url: str,
+    params: dict[str, Any],
+    provider_name: str,
+) -> dict[str, Any] | None:
+    attempts = max(1, settings.PROVIDER_RETRY_COUNT + 1)
+    for attempt in range(1, attempts + 1):
+        started = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_S) as client:
+                response = await client.get(url, params=params)
+                response.raise_for_status()
+                payload = response.json()
+            metrics.record_provider_status(provider_name, "ok")
+            metrics.record_latency(
+                f"provider.{provider_name}",
+                (time.perf_counter() - started) * 1000,
+                success=True,
+            )
+            return payload
+        except (httpx.HTTPError, ValueError) as exc:
+            metrics.record_provider_status(provider_name, f"error:{type(exc).__name__}")
+            metrics.record_latency(
+                f"provider.{provider_name}",
+                (time.perf_counter() - started) * 1000,
+                success=False,
+            )
+            if attempt >= attempts:
+                logger.warning("%s_request_failed error=%s", provider_name, exc)
+                return None
+            await asyncio.sleep(0.15 * attempt)
+    return None
+
+
+async def _request_bytes_with_retries(
+    url: str,
+    params: dict[str, Any],
+    provider_name: str,
+) -> tuple[bytes, str] | None:
+    attempts = max(1, settings.PROVIDER_RETRY_COUNT + 1)
+    for attempt in range(1, attempts + 1):
+        started = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_S) as client:
+                response = await client.get(url, params=params)
+                response.raise_for_status()
+            content_type = response.headers.get("content-type", "")
+            if not content_type.startswith("image/"):
+                metrics.record_provider_status(provider_name, "error:invalid_content_type")
+                metrics.record_latency(
+                    f"provider.{provider_name}",
+                    (time.perf_counter() - started) * 1000,
+                    success=False,
+                )
+                return None
+            metrics.record_provider_status(provider_name, "ok")
+            metrics.record_latency(
+                f"provider.{provider_name}",
+                (time.perf_counter() - started) * 1000,
+                success=True,
+            )
+            return response.content, content_type
+        except httpx.HTTPError as exc:
+            metrics.record_provider_status(provider_name, f"error:{type(exc).__name__}")
+            metrics.record_latency(
+                f"provider.{provider_name}",
+                (time.perf_counter() - started) * 1000,
+                success=False,
+            )
+            if attempt >= attempts:
+                logger.warning("%s_request_failed error=%s", provider_name, exc)
+                return None
+            await asyncio.sleep(0.15 * attempt)
+    return None
+
+
 async def _fetch_weather_context(context: dict[str, Any]) -> dict[str, Any] | None:
+    cache_key = _weather_cache_key(context)
+    if cache_key:
+        cached = weather_cache.get(cache_key)
+        if cached is not None:
+            metrics.record_provider_status("weather_cache", "hit")
+            return cached
+        metrics.record_provider_status("weather_cache", "miss")
+
     current_position = context.get("current_position") or {}
     lat = current_position.get("lat")
     lng = current_position.get("lng")
@@ -240,31 +372,33 @@ async def _fetch_weather_context(context: dict[str, Any]) -> dict[str, Any] | No
     params = {
         "latitude": lat,
         "longitude": lng,
-        "current": ",".join([
-            "temperature_2m",
-            "apparent_temperature",
-            "relative_humidity_2m",
-            "precipitation",
-            "weather_code",
-            "wind_speed_10m",
-        ]),
+        "current": ",".join(
+            [
+                "temperature_2m",
+                "apparent_temperature",
+                "relative_humidity_2m",
+                "precipitation",
+                "weather_code",
+                "wind_speed_10m",
+            ]
+        ),
         "timezone": "auto",
     }
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            response = await client.get("https://api.open-meteo.com/v1/forecast", params=params)
-            response.raise_for_status()
-            payload = response.json()
-        except Exception:
-            return None
+    payload = await _request_json_with_retries(
+        "https://api.open-meteo.com/v1/forecast",
+        params,
+        "weather",
+    )
+    if not payload:
+        return None
 
     current = payload.get("current") or {}
     if not current:
         return None
 
     weather_code = current.get("weather_code")
-    return {
+    result = {
         "temperature_c": current.get("temperature_2m"),
         "apparent_temperature_c": current.get("apparent_temperature"),
         "humidity_pct": current.get("relative_humidity_2m"),
@@ -274,6 +408,9 @@ async def _fetch_weather_context(context: dict[str, Any]) -> dict[str, Any] | No
         "summary": _describe_weather_code(weather_code),
         "observed_at": current.get("time"),
     }
+    if cache_key:
+        weather_cache.set(cache_key, result)
+    return result
 
 
 def _build_chat_prompt(message: str, context: dict[str, Any], now: datetime) -> str:
@@ -327,6 +464,14 @@ async def _fetch_street_view_image(
     google_api_key: str,
     context: dict[str, Any],
 ) -> bytes | None:
+    cache_key = _street_view_cache_key(context)
+    if cache_key:
+        cached = street_view_cache.get(cache_key)
+        if cached is not None:
+            metrics.record_provider_status("street_view_cache", "hit")
+            return cached
+        metrics.record_provider_status("street_view_cache", "miss")
+
     current_position = context.get("current_position") or {}
     lat = current_position.get("lat")
     lng = current_position.get("lng")
@@ -348,17 +493,18 @@ async def _fetch_street_view_image(
         "key": google_api_key,
     }
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            response = await client.get("https://maps.googleapis.com/maps/api/streetview", params=params)
-            response.raise_for_status()
-        except Exception:
-            return None
-
-    content_type = response.headers.get("content-type", "")
-    if not content_type.startswith("image/"):
+    result = await _request_bytes_with_retries(
+        "https://maps.googleapis.com/maps/api/streetview",
+        params,
+        "street_view",
+    )
+    if not result:
         return None
-    return response.content
+
+    payload, _content_type = result
+    if cache_key:
+        street_view_cache.set(cache_key, payload)
+    return payload
 
 
 async def gemini_translate(
@@ -420,11 +566,14 @@ async def gemini_chat(
     weather = await _fetch_weather_context(context) if need_weather else None
     if weather:
         context = {**context, "weather": weather}
+
     now = datetime.now(ZoneInfo("America/New_York"))
     prompt = _build_chat_prompt(message, context, now)
     contents: list[Any] = [types.Part.from_text(text=prompt)]
 
-    street_view_image = await _fetch_street_view_image(google_api_key, context) if need_street_view else None
+    street_view_image = (
+        await _fetch_street_view_image(google_api_key, context) if need_street_view else None
+    )
     if street_view_image:
         contents.append(types.Part.from_bytes(data=street_view_image, mime_type="image/jpeg"))
 
@@ -440,3 +589,10 @@ async def gemini_chat(
         contents,
     )
     return {"reply": reply, "mode": "gemini"}
+
+
+def get_cache_stats() -> dict[str, dict[str, int | str]]:
+    return {
+        "weather": weather_cache.stats(),
+        "street_view": street_view_cache.stats(),
+    }

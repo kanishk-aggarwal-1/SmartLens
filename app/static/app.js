@@ -18,7 +18,8 @@ const navState = {
   rerouteCooldownUntil: 0,
   routeLoading: false,
   panoLookupPending: false,
-  lastPanoLookupAt: 0
+  lastPanoLookupAt: 0,
+  followMap: true
 }
 
 const ARROW_STRAIGHT = "\u2191"
@@ -31,10 +32,12 @@ const STORAGE_DEST = "smartlens:last_dest"
 
 let routeSteps = []
 let routePoints = []
+let routeOptions = []
 let speechStartTimer = null
 let speechPrimed = false
 let aiContextCache = null
 let lastPanoRefreshPos = null
+let lastRouteRequest = null
 
 const INITIAL_VIEW_POSITION = { lat: 0, lng: 0 }
 
@@ -227,6 +230,13 @@ function syncButtonStates() {
   ui("resetDemoBtn").disabled = navState.routeLoading
 }
 
+function syncMapControlState() {
+  const followBtn = ui("followToggleBtn")
+  if (!followBtn) return
+  followBtn.textContent = `Follow: ${navState.followMap ? "On" : "Off"}`
+  followBtn.classList.toggle("active", navState.followMap)
+}
+
 function interpolate(a, b, t) {
   return {
     lat: a.lat + (b.lat - a.lat) * t,
@@ -296,6 +306,19 @@ function currentPositionForContext() {
   }
 
   return null
+}
+
+function recenterMap(resumeFollow = true) {
+  if (!gpsMap || !gpsMarker) return
+  const pos = currentPositionForContext()
+  if (!pos) return
+
+  gpsMarker.setPosition(pos)
+  gpsMap.setCenter(pos)
+  if (resumeFollow) {
+    navState.followMap = true
+    syncMapControlState()
+  }
 }
 
 function cacheKeyForPosition(pos) {
@@ -426,6 +449,29 @@ function setNavMessage(primary, secondary = "") {
   ui("navPrimary").textContent = primary
 }
 
+function populateRouteOptions(options = [], selectedIndex = 0) {
+  const select = ui("routeSelect")
+  if (!select) return
+
+  routeOptions = Array.isArray(options) ? options : []
+  if (!routeOptions.length) {
+    select.innerHTML = '<option value="0">Route 1</option>'
+    select.value = "0"
+    select.disabled = true
+    return
+  }
+
+  select.innerHTML = routeOptions.map((option, index) => {
+    const distanceKm = option.total_distance_m ? `${(option.total_distance_m / 1000).toFixed(1)} km` : ""
+    const durationMin = option.total_duration_s ? `${Math.max(1, Math.round(option.total_duration_s / 60))} min` : ""
+    const meta = [distanceKm, durationMin].filter(Boolean).join(" - ")
+    const label = meta ? `${option.summary} (${meta})` : option.summary
+    return `<option value="${index}">${label}</option>`
+  }).join("")
+  select.value = String(selectedIndex)
+  select.disabled = routeOptions.length <= 1
+}
+
 function setNextPreview(currentDistance = null) {
   const queueSteps = routeSteps
     .slice(navState.currentStepIndex, navState.currentStepIndex + 3)
@@ -530,15 +576,34 @@ function nearestDistanceToRoute(pos) {
   return min
 }
 
-async function fetchRoute(origin, dest) {
+async function fetchRoute(origin, dest, options = {}) {
+  const payload = {
+    origin,
+    destination: dest,
+    waypoints: options.waypoints || [],
+    route_index: options.routeIndex || 0,
+    include_alternatives: options.includeAlternatives !== false
+  }
+
   const r = await fetch("/api/route", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ origin: origin, destination: dest })
+    body: JSON.stringify(payload)
   })
 
   if (!r.ok) {
-    throw new Error("Route request failed.")
+    let message = "Route request failed."
+    try {
+      const err = await r.json()
+      if (typeof err.detail === "string") {
+        message = err.detail
+      } else if (err.detail && typeof err.detail === "object") {
+        message = err.detail.message || message
+      }
+    } catch (_) {
+      // keep default
+    }
+    throw new Error(message)
   }
 
   const data = await r.json()
@@ -568,6 +633,13 @@ async function fetchRoute(origin, dest) {
     routePoints = decoded.map((p) => ({ lat: p.lat(), lng: p.lng() }))
   }
   routeSteps = data.steps || []
+  populateRouteOptions(data.route_options || [], data.selected_route_index || 0)
+  lastRouteRequest = {
+    origin,
+    destination: dest,
+    waypoints: options.waypoints || [],
+    includeAlternatives: options.includeAlternatives !== false
+  }
 
   navState.currentStepIndex = 0
   navState.pathIndex = 0
@@ -587,6 +659,8 @@ async function fetchRoute(origin, dest) {
     gpsMarker.setPosition(startLocation)
     gpsMap.setCenter(startLocation)
     gpsMap.setZoom(17)
+    navState.followMap = true
+    syncMapControlState()
     syncLensPanoramas(routePoints[0], navState.currentHeading)
     requestPanoramaRefresh(routePoints[0], navState.currentHeading)
   }
@@ -707,7 +781,7 @@ async function loadRoute(origin, dest, opts = {}) {
   syncButtonStates()
 
   try {
-    await fetchRoute(origin, dest)
+    await fetchRoute(origin, dest, opts)
     setInlineStatus("Route loaded.", "ok")
     setNavMessage("Route ready", `${navState.remainingMeters || 0} m`)
     setNextPreview()
@@ -739,6 +813,7 @@ function geocodeAddress(geocoder, address) {
 async function resolveInputsToCoordinates() {
   const source = ui("sourceInput").value.trim()
   const dest = ui("destInput").value.trim()
+  const waypointText = ui("waypointsInput").value.trim()
 
   if (!source || !dest) {
     throw new Error("Enter both start and destination.")
@@ -747,6 +822,14 @@ async function resolveInputsToCoordinates() {
   const geocoder = new google.maps.Geocoder()
   const s = await geocodeAddress(geocoder, source)
   const d = await geocodeAddress(geocoder, dest)
+  const waypointAddresses = waypointText
+    ? waypointText.split(";").map((item) => item.trim()).filter(Boolean)
+    : []
+  const waypointLocations = []
+  for (const address of waypointAddresses) {
+    const point = await geocodeAddress(geocoder, address)
+    waypointLocations.push({ lat: point.lat(), lng: point.lng() })
+  }
 
   startLocation = { lat: s.lat(), lng: s.lng() }
   destination = { lat: d.lat(), lng: d.lng() }
@@ -756,7 +839,8 @@ async function resolveInputsToCoordinates() {
 
   return {
     origin: startLocation,
-    destination: destination
+    destination: destination,
+    waypoints: waypointLocations
   }
 }
 
@@ -764,7 +848,11 @@ async function loadRouteFromInputs() {
   try {
     setInlineStatus("Resolving addresses...", "pending")
     const payload = await resolveInputsToCoordinates()
-    await loadRoute(payload.origin, payload.destination)
+    await loadRoute(payload.origin, payload.destination, {
+      waypoints: payload.waypoints,
+      routeIndex: Number(ui("routeSelect").value || 0),
+      includeAlternatives: true
+    })
   } catch (err) {
     setInlineStatus(err.message, "error")
   }
@@ -777,9 +865,14 @@ async function rerouteFromPosition(pos) {
 
   try {
     setInlineStatus("Off-route detected. Re-routing...", "pending")
-    await loadRoute(pos, destination, { silent: true })
+    await loadRoute(pos, destination, {
+      waypoints: [],
+      routeIndex: 0,
+      includeAlternatives: true,
+      silent: true
+    })
   } catch (_) {
-    setInlineStatus("Re-route failed. Try Retry Route.", "error")
+    setInlineStatus("Re-route failed. Load the route again.", "error")
   }
 }
 
@@ -816,7 +909,9 @@ function animate() {
   syncLensPanoramas(pos, navState.currentHeading)
 
   gpsMarker.setPosition(pos)
-  gpsMap.setCenter(pos)
+  if (navState.followMap) {
+    gpsMap.setCenter(pos)
+  }
 
   ui("latText").textContent = pos.lat.toFixed(6)
   ui("lngText").textContent = pos.lng.toFixed(6)
@@ -841,7 +936,11 @@ async function startDemo() {
     if (!navState.routeLoaded || routePoints.length === 0) {
       setInlineStatus("No route loaded. Loading now...", "pending")
       const payload = await resolveInputsToCoordinates()
-      await loadRoute(payload.origin, payload.destination)
+      await loadRoute(payload.origin, payload.destination, {
+        waypoints: payload.waypoints,
+        routeIndex: Number(ui("routeSelect").value || 0),
+        includeAlternatives: true
+      })
     }
 
     navState.running = true
@@ -873,10 +972,13 @@ function resetDemo() {
   navState.remainingMeters = null
   navState.panoLookupPending = false
   navState.lastPanoLookupAt = 0
+  navState.followMap = true
   lastPanoRefreshPos = null
 
   routeSteps = []
   routePoints = []
+  routeOptions = []
+  lastRouteRequest = null
 
   if (routeLine) routeLine.setPath([])
 
@@ -899,8 +1001,10 @@ function resetDemo() {
   setLensReadyState(false)
 
   setNavMessage("Waiting for route...", "-")
+  populateRouteOptions([], 0)
   setNextPreview()
   setInlineStatus("Reset complete.", "ok")
+  syncMapControlState()
   syncButtonStates()
 }
 
@@ -935,7 +1039,11 @@ async function runTranslate() {
     let message = "Translation request failed."
     try {
       const err = await r.json()
-      message = err.detail || message
+      if (typeof err.detail === "string") {
+        message = err.detail
+      } else if (err.detail && typeof err.detail === "object") {
+        message = err.detail.message || message
+      }
     } catch (_) {
       // keep default
     }
@@ -980,7 +1088,11 @@ async function runChat(messageOverride = null, intent = null) {
     let message = "Chat request failed."
     try {
       const err = await r.json()
-      message = err.detail || message
+      if (typeof err.detail === "string") {
+        message = err.detail
+      } else if (err.detail && typeof err.detail === "object") {
+        message = err.detail.message || message
+      }
     } catch (_) {
       // keep default
     }
@@ -1029,16 +1141,62 @@ function initMaps() {
   })
   streetViewService = new google.maps.StreetViewService()
   setLensReadyState(false)
+  syncMapControlState()
+
+  gpsMap.addListener("dragstart", () => {
+    navState.followMap = false
+    syncMapControlState()
+  })
+  gpsMap.addListener("zoom_changed", () => {
+    if (navState.running) {
+      navState.followMap = false
+      syncMapControlState()
+    }
+  })
 
   setNavMessage("Load a route to begin", "-")
+  populateRouteOptions([], 0)
   setNextPreview()
 }
 
 function initControls() {
+  if (ui("logoutBtn")) {
+    ui("logoutBtn").onclick = async () => {
+      await fetch("/auth/logout", { method: "POST" })
+      window.location.href = "/"
+    }
+  }
+
   ui("routeBtn").onclick = loadRouteFromInputs
   ui("startDemoBtn").onclick = startDemo
   ui("stopDemoBtn").onclick = stopDemo
   ui("resetDemoBtn").onclick = resetDemo
+  ui("followToggleBtn").onclick = () => {
+    navState.followMap = !navState.followMap
+    syncMapControlState()
+    if (navState.followMap) {
+      recenterMap(true)
+      setInlineStatus("Map follow resumed.", "ok")
+    } else {
+      setInlineStatus("Map follow paused.", "ok")
+    }
+  }
+  ui("recenterBtn").onclick = () => {
+    recenterMap(true)
+    setInlineStatus("Map recentered.", "ok")
+  }
+  ui("routeSelect").onchange = async () => {
+    if (!lastRouteRequest || navState.routeLoading) return
+    try {
+      await loadRoute(lastRouteRequest.origin, lastRouteRequest.destination, {
+        waypoints: lastRouteRequest.waypoints,
+        routeIndex: Number(ui("routeSelect").value || 0),
+        includeAlternatives: lastRouteRequest.includeAlternatives
+      })
+    } catch (_) {
+      // loadRoute already surfaces the error
+    }
+  }
 
   ui("translateBtn").onclick = () => runTranslate()
   ui("translateVoiceBtn").onclick = () => {
@@ -1093,3 +1251,4 @@ window.addEventListener("load", () => {
     }
   }, 50)
 })
+

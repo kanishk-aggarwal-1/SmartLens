@@ -6,3 +6,6 @@ pydantic
 pydantic-settings
 httpx
 google-genai
+redis
+cryptography
+psycopg[binary]

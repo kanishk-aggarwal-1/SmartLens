@@ -13,6 +13,8 @@ from app.services.ai import (
     _parse_gemini_translation_response,
     _requested_context,
 )
+from app.services.directions import route_cache
+from app.services.ai import street_view_cache, weather_cache
 
 
 class ApiSmokeTests(unittest.TestCase):
@@ -31,6 +33,30 @@ class ApiSmokeTests(unittest.TestCase):
         res = self.client.get("/")
         self.assertEqual(res.status_code, 200)
         self.assertIn("text/html", res.headers.get("content-type", ""))
+
+    def test_health_ok(self):
+        res = self.client.get("/health")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertIn(body.get("status"), {"ok", "degraded"})
+        self.assertIn("ai_mode", body)
+
+    def test_metrics_exposes_latency_and_cache_sections(self):
+        route_cache.clear()
+        weather_cache.clear()
+        street_view_cache.clear()
+
+        self.client.get("/")
+        res = self.client.get("/metrics")
+
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body.get("status"), "ok")
+        self.assertIn("metrics", body)
+        self.assertIn("cache", body)
+        self.assertIn("routes", body["cache"])
+        self.assertIn("weather", body["cache"])
+        self.assertIn("street_view", body["cache"])
 
     def test_chat_mock_success(self):
         res = self.client.post(
@@ -81,7 +107,9 @@ class ApiSmokeTests(unittest.TestCase):
             main_mod.settings.GEMINI_API_KEY = None
 
         self.assertEqual(res.status_code, 502)
-        self.assertIn("Gemini request failed", res.json().get("detail", ""))
+        detail = res.json().get("detail", {})
+        self.assertIn("Gemini request failed", detail.get("message", ""))
+        self.assertEqual(detail.get("code"), "AI_TRANSLATION_FAILED")
 
     def test_chat_uses_gemini_with_maps_context(self):
         async def fake_chat(gemini_key, model, google_api_key, message, context=None, intent=None):
@@ -174,6 +202,8 @@ class ApiSmokeTests(unittest.TestCase):
                 "status": "OK",
                 "total_distance_m": 100,
                 "total_duration_s": 80,
+                "route_options": [{"index": 0, "summary": "Fastest", "total_distance_m": 100, "total_duration_s": 80}],
+                "selected_route_index": 0,
                 "steps": [
                     {
                         "instruction_html": "Head north",
@@ -200,6 +230,7 @@ class ApiSmokeTests(unittest.TestCase):
         body = res.json()
         self.assertEqual(body.get("status"), "OK")
         self.assertEqual(len(body.get("steps", [])), 1)
+        self.assertEqual(body.get("selected_route_index"), 0)
 
     def test_route_failure_status_propagates(self):
         async def fake_route(**_kwargs):
@@ -220,6 +251,60 @@ class ApiSmokeTests(unittest.TestCase):
 
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json().get("status"), "NOT_FOUND")
+
+    def test_route_request_passes_waypoints_and_route_index(self):
+        async def fake_route(**kwargs):
+            self.assertEqual(kwargs["route_index"], 1)
+            self.assertEqual(kwargs["waypoints"], [{"lat": 40.05, "lng": -73.05}])
+            return {
+                "status": "OK",
+                "total_distance_m": 120,
+                "total_duration_s": 90,
+                "route_options": [
+                    {"index": 0, "summary": "Route A", "total_distance_m": 120, "total_duration_s": 90},
+                    {"index": 1, "summary": "Route B", "total_distance_m": 135, "total_duration_s": 100},
+                ],
+                "selected_route_index": 1,
+                "steps": [],
+                "overview_polyline": "abc",
+            }
+
+        with patch.object(main_mod, "get_walking_route_steps", fake_route):
+            res = self.client.post(
+                "/api/route",
+                json={
+                    "origin": {"lat": 40.0, "lng": -73.0},
+                    "destination": {"lat": 40.1, "lng": -73.1},
+                    "waypoints": [{"lat": 40.05, "lng": -73.05}],
+                    "route_index": 1,
+                },
+            )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json().get("selected_route_index"), 1)
+
+    def test_route_service_error_becomes_structured_http_error(self):
+        async def fake_route(**_kwargs):
+            raise main_mod.RouteServiceError(
+                "Requested route option is out of range.",
+                code="ROUTE_INDEX_INVALID",
+                retryable=False,
+            )
+
+        with patch.object(main_mod, "get_walking_route_steps", fake_route):
+            res = self.client.post(
+                "/api/route",
+                json={
+                    "origin": {"lat": 40.0, "lng": -73.0},
+                    "destination": {"lat": 40.1, "lng": -73.1},
+                    "route_index": 99,
+                },
+            )
+
+        self.assertEqual(res.status_code, 400)
+        detail = res.json().get("detail", {})
+        self.assertEqual(detail.get("code"), "ROUTE_INDEX_INVALID")
+        self.assertEqual(detail.get("retryable"), False)
 
     def test_route_validation_error(self):
         res = self.client.post("/api/route", json={"origin": {"lat": 1.0, "lng": 1.0}})

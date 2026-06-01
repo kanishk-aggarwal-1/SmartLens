@@ -14,6 +14,8 @@ class FrontendContractTests(unittest.TestCase):
             "startDemoBtn",
             "stopDemoBtn",
             "resetDemoBtn",
+            "waypointsInput",
+            "routeSelect",
             "promptInput",
             "sourceLangInput",
             "targetLangInput",
@@ -24,6 +26,8 @@ class FrontendContractTests(unittest.TestCase):
             "inlineStatus",
             "navQueue",
             "notificationText",
+            "followToggleBtn",
+            "recenterBtn",
         ]
         for control_id in required_ids:
             self.assertIn(f'id="{control_id}"', HTML)
@@ -34,14 +38,19 @@ class FrontendContractTests(unittest.TestCase):
             'ui("startDemoBtn").onclick = startDemo',
             'ui("stopDemoBtn").onclick = stopDemo',
             'ui("resetDemoBtn").onclick = resetDemo',
+            'ui("routeSelect").onchange = async () => {',
+            'ui("followToggleBtn").onclick = () => {',
+            'ui("recenterBtn").onclick = () => {',
             'ui("translateVoiceBtn").onclick = () => {',
             'ui("chatVoiceBtn").onclick = () => {',
             'ui("speakAiBtn").onclick = () => {',
             'ui("speakTranslateBtn").onclick = () => {',
             'body: JSON.stringify({ text, source_lang: sourceLang, target_lang: targetLang })',
             'chatContext = await buildAiContext(message)',
+            "function populateRouteOptions(options = [], selectedIndex = 0) {",
             "function classifyChatNeeds(message) {",
             "function setNextPreview(currentDistance = null) {",
+            "function recenterMap(resumeFollow = true) {",
             "turnQueueItem",
         ]
         for snippet in expected_snippets:
