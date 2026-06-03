@@ -298,8 +298,7 @@ Configure the app environment variables in Vercel, including `DATABASE_URL`, `SE
 
 - The app uses simulated route playback, not real device GPS.
 - The lenses use Google Street View, not a live camera feed.
-- There is no database or user persistence.
-- Metrics and caches are in-memory only.
+- Metrics are in-memory; caching is in-memory by default, with an optional Redis backend.
 - Browser voice recognition quality depends on the browser and OS speech engine.
 - Waypoints, alternate routes, and true AR road anchoring are not implemented.
 
