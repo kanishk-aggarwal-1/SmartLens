@@ -148,16 +148,20 @@ async def health():
     )
 
 
+def _all_cache_stats() -> dict[str, Any]:
+    return {
+        **get_route_cache_stats(),
+        **get_ai_cache_stats(),
+    }
+
+
 @app.get("/metrics")
 async def get_metrics(_user: str = Depends(require_authenticated_request)):
     return JSONResponse(
         {
             "status": "ok",
             "metrics": metrics.summary(),
-            "cache": {
-                **get_route_cache_stats(),
-                **get_ai_cache_stats(),
-            },
+            "cache": _all_cache_stats(),
         }
     )
 
@@ -165,6 +169,20 @@ async def get_metrics(_user: str = Depends(require_authenticated_request)):
 @app.get("/metrics/prometheus")
 async def get_prometheus_metrics(_user: str = Depends(require_authenticated_request)):
     return PlainTextResponse(metrics.prometheus_text(), media_type="text/plain; version=0.0.4")
+
+
+@app.get("/metrics/summary")
+async def get_metrics_summary():
+    """Public read-only endpoint with live, non-sensitive aggregates.
+
+    No authentication required — exposes only opaque numeric counters,
+    latency percentiles, and cache hit rates.  No API keys, no user data,
+    no internal error strings.
+    """
+    return JSONResponse(
+        metrics.public_summary(_all_cache_stats()),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -367,6 +385,11 @@ async def api_route(
                 retryable=exc.retryable,
             ),
         ) from exc
+
+    # Count successfully loaded routes (status OK means real steps were returned).
+    if data.get("status") == "OK" and data.get("steps"):
+        metrics.increment("routes_loaded")
+
     return JSONResponse(data)
 
 
@@ -394,8 +417,10 @@ async def api_translate(
                 payload.source_lang,
                 payload.target_lang,
             )
+            actual_mode = "gemini"
         else:
             data = mock_translate(payload.text, payload.target_lang, payload.source_lang)
+            actual_mode = "mock"
     except AIServiceError as exc:
         raise HTTPException(
             status_code=502,
@@ -406,6 +431,8 @@ async def api_translate(
                 retryable=True,
             ),
         ) from exc
+
+    metrics.increment("ai_mode", tags={"mode": actual_mode, "op": "translate"})
     return JSONResponse(data)
 
 
@@ -434,8 +461,10 @@ async def api_chat(
                 context=payload.context,
                 intent=payload.intent,
             )
+            actual_mode = "gemini"
         else:
             data = mock_chat(payload.message, context=payload.context, intent=payload.intent)
+            actual_mode = "mock"
     except AIServiceError as exc:
         raise HTTPException(
             status_code=502,
@@ -446,4 +475,6 @@ async def api_chat(
                 retryable=True,
             ),
         ) from exc
+
+    metrics.increment("ai_mode", tags={"mode": actual_mode, "op": "chat"})
     return JSONResponse(data)

@@ -1,0 +1,123 @@
+{
+  "__inputs": [],
+  "__requires": [
+    {"type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0"},
+    {"type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0"},
+    {"type": "panel", "id": "stat", "name": "Stat", "version": ""},
+    {"type": "panel", "id": "timeseries", "name": "Time series", "version": ""},
+    {"type": "panel", "id": "table", "name": "Table", "version": ""}
+  ],
+  "annotations": {"list": []},
+  "description": "SmartLens — live traffic, provider latency, cache hit rates",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+
+    {
+      "id": 1,
+      "title": "Total Requests",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "area", "textMode": "auto"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}, "unit": "short"}},
+      "targets": [{"datasource": "Prometheus", "expr": "sum(smartlens_request_count)", "instant": true, "legendFormat": "Total"}]
+    },
+
+    {
+      "id": 2,
+      "title": "Total Errors (5xx)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "area"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "unit": "short"}},
+      "targets": [{"datasource": "Prometheus", "expr": "sum(smartlens_request_error_count) or vector(0)", "instant": true, "legendFormat": "Errors"}]
+    },
+
+    {
+      "id": 3,
+      "title": "Routes Loaded",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "area"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "semi-dark-green", "value": null}]}, "unit": "short"}},
+      "targets": [{"datasource": "Prometheus", "expr": "smartlens_event_count{event=\"routes_loaded\"} or vector(0)", "instant": true, "legendFormat": "Routes"}]
+    },
+
+    {
+      "id": 4,
+      "title": "AI Mode — Gemini vs Mock",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value", "graphMode": "none", "textMode": "value_and_name"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "targets": [
+        {"datasource": "Prometheus", "expr": "sum(smartlens_event_count{event=\"ai_mode\", mode=\"gemini\"}) or vector(0)", "instant": true, "legendFormat": "Gemini"},
+        {"datasource": "Prometheus", "expr": "sum(smartlens_event_count{event=\"ai_mode\", mode=\"mock\"}) or vector(0)",   "instant": true, "legendFormat": "Mock"}
+      ]
+    },
+
+    {
+      "id": 5,
+      "title": "Request Rate (/s) by Endpoint",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 16, "x": 0, "y": 4},
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"lineWidth": 2, "fillOpacity": 8}}},
+      "targets": [
+        {"datasource": "Prometheus", "expr": "rate(smartlens_request_count{name=~\"http /api.*\"}[1m])", "legendFormat": "{{name}}"},
+        {"datasource": "Prometheus", "expr": "rate(smartlens_request_count{name=\"http /\"}[1m])",       "legendFormat": "{{name}}"}
+      ]
+    },
+
+    {
+      "id": 6,
+      "title": "Error Rate (/s)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 4},
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "reqps", "color": {"fixedColor": "red", "mode": "fixed"}, "custom": {"lineWidth": 2, "fillOpacity": 10}}},
+      "targets": [
+        {"datasource": "Prometheus", "expr": "rate(smartlens_request_error_count[1m])", "legendFormat": "{{name}}"}
+      ]
+    },
+
+    {
+      "id": 7,
+      "title": "Provider Call Rate (/s)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"lineWidth": 2, "fillOpacity": 8}}},
+      "targets": [
+        {"datasource": "Prometheus", "expr": "rate(smartlens_request_count{name=~\"provider\\..*\"}[1m])", "legendFormat": "{{name}}"}
+      ]
+    },
+
+    {
+      "id": 8,
+      "title": "Event Counts",
+      "type": "table",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "options": {"footer": {"show": false}, "showHeader": true},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "targets": [
+        {"datasource": "Prometheus", "expr": "sort_desc(smartlens_event_count)", "instant": true, "legendFormat": "{{event}} {{mode}} {{op}} {{path}}"}
+      ],
+      "transformations": [{"id": "labelsToFields", "options": {}}]
+    }
+
+  ],
+  "refresh": "15s",
+  "schemaVersion": 38,
+  "tags": ["smartlens"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "SmartLens — Live Metrics",
+  "uid": "smartlens-live",
+  "version": 1
+}

@@ -132,7 +132,9 @@ def _gemini_generate_sync(
     model: str,
     system_instruction: str,
     contents: Any,
+    metric_name: str = "gemini",
 ) -> str:
+    """Call Gemini synchronously and record latency under ``provider.<metric_name>``."""
     from google import genai
     from google.genai import errors as genai_errors
     from google.genai import types
@@ -146,16 +148,19 @@ def _gemini_generate_sync(
             config=types.GenerateContentConfig(system_instruction=system_instruction),
         )
     except genai_errors.ClientError as exc:
+        elapsed = (time.perf_counter() - started) * 1000
         metrics.record_provider_status("gemini", f"error:{exc.__class__.__name__}")
-        metrics.record_latency("provider.gemini", (time.perf_counter() - started) * 1000, success=False)
+        metrics.record_latency(f"provider.{metric_name}", elapsed, success=False)
         raise AIServiceError(f"Gemini request failed: {exc}") from exc
     except Exception as exc:
+        elapsed = (time.perf_counter() - started) * 1000
         metrics.record_provider_status("gemini", f"error:{exc.__class__.__name__}")
-        metrics.record_latency("provider.gemini", (time.perf_counter() - started) * 1000, success=False)
+        metrics.record_latency(f"provider.{metric_name}", elapsed, success=False)
         raise AIServiceError("Gemini request failed.") from exc
 
+    elapsed = (time.perf_counter() - started) * 1000
     metrics.record_provider_status("gemini", "ok")
-    metrics.record_latency("provider.gemini", (time.perf_counter() - started) * 1000, success=True)
+    metrics.record_latency(f"provider.{metric_name}", elapsed, success=True)
     return (response.text or "").strip()
 
 
@@ -533,6 +538,7 @@ async def gemini_translate(
         model,
         "You are a precise, concise translation engine.",
         prompt,
+        "gemini_translate",  # metric_name — recorded under provider.gemini_translate
     )
     detected_source_lang, translated_text = _parse_gemini_translation_response(
         translated,
@@ -587,6 +593,7 @@ async def gemini_chat(
             "If the user asks for the current time or date, answer using the provided local values exactly."
         ),
         contents,
+        "gemini_chat",  # metric_name — recorded under provider.gemini_chat
     )
     return {"reply": reply, "mode": "gemini"}
 

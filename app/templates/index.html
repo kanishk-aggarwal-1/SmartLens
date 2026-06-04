@@ -127,12 +127,320 @@
 </div>
 </div>
 
+</div><!-- /.grid -->
+
+<!-- =====================================================
+     Live Metrics Panel
+     ===================================================== -->
+<button class="metricsToggleBtn" id="metricsToggleBtn">📊 Live Metrics</button>
+
+<div class="metricsPanel collapsed" id="metricsPanel" role="dialog" aria-label="Live metrics">
+  <div class="metricsPanelHeader">
+    <span class="metricsPanelTitle">📊 Live Metrics</span>
+    <button class="metricsPanelClose" id="metricsPanelClose" title="Close">✕</button>
+  </div>
+  <div class="metricsPanelBody" id="metricsPanelBody">
+
+    <!-- Provider latency -->
+    <div>
+      <div class="metricsSectionTitle">Provider Latency</div>
+      <div class="metricsCards" id="metricsProviders">
+        <div class="metricsCard" style="color:var(--muted);font-size:11px">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Cache hit rates -->
+    <div>
+      <div class="metricsSectionTitle">Cache Hit Rates</div>
+      <div id="metricsCache"></div>
+    </div>
+
+    <!-- AI usage + request counts -->
+    <div class="metricsGrid2">
+      <div>
+        <div class="metricsSectionTitle">AI Usage</div>
+        <div class="metricsCard" id="metricsAI"></div>
+      </div>
+      <div>
+        <div class="metricsSectionTitle">Requests</div>
+        <div class="metricsCard" id="metricsRequests"></div>
+      </div>
+    </div>
+
+    <!-- Sparkline -->
+    <div class="metricsChartWrap">
+      <div class="metricsChartLabel">API request volume (last 30 polls · 5 s each)</div>
+      <canvas id="metricsSparkline"></canvas>
+    </div>
+
+    <!-- Footer -->
+    <div class="metricsFooter">
+      <span>Routes loaded: <b id="metricsRoutesLoaded">—</b></span>
+      <span>Updated <b id="metricsAge">—</b>s ago</span>
+    </div>
+  </div>
 </div>
+
 <script src="/static/app.js"></script>
 {% if USE_MOCK_MAPS %}
 <script src="/static/google-maps-mock.js"></script>
 {% else %}
 <script src="https://maps.googleapis.com/maps/api/js?key={{ GOOGLE_MAPS_API_KEY }}&libraries=geometry,places"></script>
 {% endif %}
+
+<script>
+/* =====================================================
+   Live Metrics Panel — polls GET /metrics/summary
+   every 5 s when the panel is open.
+   ===================================================== */
+(function () {
+  'use strict';
+
+  // ---- state ----
+  var POLL_MS     = 5000;
+  var MAX_HISTORY = 30;
+  var _history    = [];      // [{t, apiTotal}]
+  var _prevTotal  = null;    // used to compute per-interval delta
+  var _lastFetch  = null;    // Date.now() of last successful fetch
+  var _pollTimer  = null;
+  var _ageTimer   = null;
+  var _open       = false;
+
+  // ---- DOM refs (resolved after DOMContentLoaded) ----
+  var elPanel, elToggle, elClose, elProviders, elCache, elAI,
+      elRequests, elCanvas, elAge, elRoutes;
+
+  function init() {
+    elPanel     = document.getElementById('metricsPanel');
+    elToggle    = document.getElementById('metricsToggleBtn');
+    elClose     = document.getElementById('metricsPanelClose');
+    elProviders = document.getElementById('metricsProviders');
+    elCache     = document.getElementById('metricsCache');
+    elAI        = document.getElementById('metricsAI');
+    elRequests  = document.getElementById('metricsRequests');
+    elCanvas    = document.getElementById('metricsSparkline');
+    elAge       = document.getElementById('metricsAge');
+    elRoutes    = document.getElementById('metricsRoutesLoaded');
+
+    elToggle.addEventListener('click', function () {
+      setOpen(!_open);
+    });
+    elClose.addEventListener('click', function () {
+      setOpen(false);
+    });
+
+    // update "X s ago" every second
+    _ageTimer = setInterval(function () {
+      if (_lastFetch !== null && elAge) {
+        elAge.textContent = Math.round((Date.now() - _lastFetch) / 1000);
+      }
+    }, 1000);
+  }
+
+  function setOpen(open) {
+    _open = open;
+    if (open) {
+      elPanel.classList.remove('collapsed');
+      elToggle.textContent = '✕ Metrics';
+      if (!_pollTimer) {
+        fetchMetrics(); // immediate fetch
+        _pollTimer = setInterval(fetchMetrics, POLL_MS);
+      }
+    } else {
+      elPanel.classList.add('collapsed');
+      elToggle.textContent = '📊 Live Metrics';
+    }
+  }
+
+  // ---- fetch ----
+  function fetchMetrics() {
+    fetch('/metrics/summary')
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (data) {
+        _lastFetch = Date.now();
+        renderAll(data);
+      })
+      .catch(function (e) {
+        console.warn('[metrics] fetch failed', e);
+      });
+  }
+
+  // ---- renderers ----
+  function renderAll(d) {
+    renderProviders(d.providers || {});
+    renderCache(d.cache || {});
+    renderAI(d.ai || {});
+    renderRequests(d.requests || {});
+    pushHistory(d.requests || {});
+    drawSparkline();
+    if (elRoutes) elRoutes.textContent = (d.routes_loaded || 0).toLocaleString();
+  }
+
+  function renderProviders(providers) {
+    if (!elProviders) return;
+    var keys = Object.keys(providers);
+    if (keys.length === 0) {
+      elProviders.innerHTML = '<div class="metricsCard" style="color:var(--muted);font-size:11px">No provider calls yet.</div>';
+      return;
+    }
+    elProviders.innerHTML = keys.map(function (name) {
+      var p = providers[name];
+      var errClass = p.errors > 0 ? 'metricsErr' : 'metricsOk';
+      var errVal   = p.errors > 0 ? p.errors : '0';
+      return '<div class="metricsCard">' +
+        '<div class="metricsCardTitle">' + esc(name) + '</div>' +
+        '<div class="metricsCardStats">' +
+          '<span>avg&nbsp;<b>' + p.avg_ms + ' ms</b></span>' +
+          '<span>p50&nbsp;<b>' + p.p50_ms + ' ms</b></span>' +
+          '<span>p95&nbsp;<b>' + p.p95_ms + ' ms</b></span>' +
+          '<span class="' + errClass + '">' + errVal + '&thinsp;err&thinsp;/&thinsp;' + p.count + '</span>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  function renderCache(cache) {
+    if (!elCache) return;
+    var keys = Object.keys(cache);
+    if (keys.length === 0) {
+      elCache.innerHTML = '<div style="color:var(--muted);font-size:11px">No cache data yet.</div>';
+      return;
+    }
+    elCache.innerHTML = keys.map(function (name) {
+      var c       = cache[name];
+      var pct     = c.hit_rate != null ? Math.round(c.hit_rate * 100) : null;
+      var pctTxt  = pct != null ? pct + '%' : '—';
+      var width   = pct != null ? pct : 0;
+      var backend = c.backend || 'memory';
+      return '<div class="metricsHitRow">' +
+          '<span class="metricsHitLabel">' + esc(name) + '</span>' +
+          '<div class="metricsHitBar"><div class="metricsHitFill" style="width:' + width + '%"></div></div>' +
+          '<span class="metricsHitPct">' + pctTxt + '</span>' +
+        '</div>' +
+        '<div class="metricsHitRow">' +
+          '<span></span>' +
+          '<span class="metricsHitSub">' + c.hits + ' hits / ' + c.misses + ' miss</span>' +
+          '<span class="metricsFooter" style="padding:0;border:none"><span class="metricsBackend">' + esc(backend) + '</span></span>' +
+        '</div>';
+    }).join('');
+  }
+
+  function renderAI(ai) {
+    if (!elAI) return;
+    elAI.innerHTML =
+      '<div class="metricsCardStats" style="flex-direction:column;gap:3px">' +
+        kv('Gemini chat',      ai.gemini_chat      || 0) +
+        kv('Gemini translate', ai.gemini_translate  || 0) +
+        kv('Mock chat',        ai.mock_chat         || 0) +
+        kv('Mock translate',   ai.mock_translate    || 0) +
+      '</div>';
+  }
+
+  function renderRequests(reqs) {
+    if (!elRequests) return;
+    var keys = Object.keys(reqs);
+    if (keys.length === 0) {
+      elRequests.innerHTML = '<div style="color:var(--muted);font-size:11px">—</div>';
+      return;
+    }
+    elRequests.innerHTML =
+      '<div class="metricsCardStats" style="flex-direction:column;gap:3px">' +
+        keys.map(function (p) {
+          var r = reqs[p];
+          return kv(p, r.count + (r.errors ? ' <span class="metricsErr">(' + r.errors + ' err)</span>' : ''));
+        }).join('') +
+      '</div>';
+  }
+
+  // ---- sparkline ----
+  function pushHistory(reqs) {
+    var total = Object.keys(reqs).reduce(function (s, k) {
+      return s + (reqs[k].count || 0);
+    }, 0);
+    var delta = _prevTotal !== null ? Math.max(0, total - _prevTotal) : 0;
+    _prevTotal = total;
+    _history.push({ t: Date.now(), delta: delta });
+    if (_history.length > MAX_HISTORY) _history.shift();
+  }
+
+  function drawSparkline() {
+    if (!elCanvas) return;
+    var dpr = window.devicePixelRatio || 1;
+    var w   = elCanvas.offsetWidth  || 380;
+    var h   = 52;
+    elCanvas.width  = w * dpr;
+    elCanvas.height = h * dpr;
+    elCanvas.style.width  = w + 'px';
+    elCanvas.style.height = h + 'px';
+
+    var ctx = elCanvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    var pts = _history;
+    if (pts.length < 2) {
+      ctx.fillStyle = 'rgba(151,166,195,0.3)';
+      ctx.font = '10px system-ui';
+      ctx.fillText('Waiting for data…', 8, h / 2 + 4);
+      return;
+    }
+
+    var vals = pts.map(function (p) { return p.delta; });
+    var maxV = Math.max.apply(null, vals) || 1;
+    var pad  = 4;
+
+    // fill gradient
+    var grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0,   'rgba(107,227,255,0.22)');
+    grad.addColorStop(1,   'rgba(107,227,255,0)');
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    pts.forEach(function (p, i) {
+      var x = (i / (pts.length - 1)) * w;
+      var y = h - pad - ((p.delta / maxV) * (h - pad * 2));
+      i === 0 ? ctx.lineTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // line
+    ctx.beginPath();
+    pts.forEach(function (p, i) {
+      var x = (i / (pts.length - 1)) * w;
+      var y = h - pad - ((p.delta / maxV) * (h - pad * 2));
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = '#6be3ff';
+    ctx.lineWidth   = 1.5;
+    ctx.lineJoin    = 'round';
+    ctx.stroke();
+
+    // latest value label
+    var last = vals[vals.length - 1];
+    ctx.fillStyle = 'rgba(151,166,195,0.7)';
+    ctx.font      = '9px system-ui';
+    ctx.fillText('+' + last + ' req', w - 42, 11);
+  }
+
+  // ---- utils ----
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function kv(label, val) {
+    return '<span><span style="color:var(--muted)">' + esc(label) + ':</span> <b>' + val + '</b></span>';
+  }
+
+  // ---- boot ----
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
 </body>
 </html>

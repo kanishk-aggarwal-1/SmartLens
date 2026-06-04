@@ -12,6 +12,10 @@ from .monitoring import logger, metrics
 
 T = TypeVar("T")
 
+# Redis hash key that stores cumulative hit/miss counters for all caches.
+# Keyed as  "<cache_name>:hits"  and  "<cache_name>:misses".
+_R_CACHE_STATS = "smartlens:cache_stats"
+
 
 @dataclass
 class _CacheItem(Generic[T]):
@@ -28,6 +32,9 @@ class TTLCache(Generic[T]):
         self.hits = 0
         self.misses = 0
         self._redis = self._create_redis_client()
+        # Restore persisted hit/miss counters from Redis so the panel shows
+        # cumulative totals across restarts, not just since last cold start.
+        self._load_stats_from_redis()
 
     def _create_redis_client(self):
         backend = (settings.CACHE_BACKEND or "auto").strip().lower()
@@ -46,6 +53,20 @@ class TTLCache(Generic[T]):
             if backend == "redis":
                 logger.warning("redis_cache_unavailable cache=%s error=%s", self.name, exc)
             return None
+
+    def _load_stats_from_redis(self) -> None:
+        """Restore cumulative hit/miss totals from Redis on startup."""
+        if self._redis is None:
+            return
+        try:
+            raw_hits   = self._redis.hget(_R_CACHE_STATS, f"{self.name}:hits")
+            raw_misses = self._redis.hget(_R_CACHE_STATS, f"{self.name}:misses")
+            if raw_hits is not None:
+                self.hits = int(raw_hits)
+            if raw_misses is not None:
+                self.misses = int(raw_misses)
+        except Exception as exc:
+            logger.warning("cache_load_stats_failed cache=%s error=%s", self.name, exc)
 
     def _redis_key(self, key: str) -> str:
         return f"smartlens:{self.name}:{key}"
@@ -76,9 +97,11 @@ class TTLCache(Generic[T]):
                 raw = self._redis.get(self._redis_key(key))
                 if raw is not None:
                     self.hits += 1
+                    self._redis.hincrby(_R_CACHE_STATS, f"{self.name}:hits", 1)
                     metrics.record_provider_status(f"{self.name}_redis_cache", "hit")
                     return self._decode_value(json.loads(raw))  # type: ignore[return-value]
                 self.misses += 1
+                self._redis.hincrby(_R_CACHE_STATS, f"{self.name}:misses", 1)
                 metrics.record_provider_status(f"{self.name}_redis_cache", "miss")
                 return None
             except Exception as exc:
@@ -123,6 +146,8 @@ class TTLCache(Generic[T]):
             try:
                 for key in self._redis.scan_iter(self._redis_key("*")):
                     self._redis.delete(key)
+                # Reset persisted stat counters too.
+                self._redis.hdel(_R_CACHE_STATS, f"{self.name}:hits", f"{self.name}:misses")
             except Exception as exc:
                 metrics.record_provider_status("redis", f"error:{type(exc).__name__}")
                 logger.warning("redis_cache_clear_failed cache=%s error=%s", self.name, exc)

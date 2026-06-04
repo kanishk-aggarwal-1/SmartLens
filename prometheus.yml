@@ -1,0 +1,15 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+
+# ── SmartLens scrape config ───────────────────────────────────────────────────
+# The /metrics/prometheus endpoint is public-read when REQUIRE_AUTH=false
+# (the default).  If you enable REQUIRE_AUTH, add basic_auth here or expose
+# a dedicated unauthenticated scrape endpoint instead.
+# ─────────────────────────────────────────────────────────────────────────────
+scrape_configs:
+  - job_name: smartlens
+    static_configs:
+      - targets: ["app:8000"]
+    metrics_path: /metrics/prometheus
+    scrape_timeout: 10s
